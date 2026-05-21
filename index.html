@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kimbo Tetris — Endless</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="stage">
+      <section class="board-wrap">
+        <canvas id="board" width="300" height="600" aria-label="Tetris board"></canvas>
+        <div id="overlay" class="overlay hidden">
+          <div id="overlay-text">Paused</div>
+          <div id="overlay-sub">press P to resume</div>
+        </div>
+      </section>
+
+      <aside class="hud">
+        <div class="hud-block">
+          <div class="hud-label">Score</div>
+          <div id="score" class="hud-value">0</div>
+        </div>
+        <div class="hud-block">
+          <div class="hud-label">Best</div>
+          <div id="best" class="hud-value">0</div>
+        </div>
+        <div class="hud-block">
+          <div class="hud-label">Level</div>
+          <div id="level" class="hud-value">1</div>
+        </div>
+        <div class="hud-block">
+          <div class="hud-label">Lines</div>
+          <div id="lines" class="hud-value">0</div>
+        </div>
+        <div class="hud-block">
+          <div class="hud-label">Next</div>
+          <canvas id="next" width="120" height="120"></canvas>
+        </div>
+        <div class="hud-block keys">
+          <div class="hud-label">Keys</div>
+          <ul>
+            <li><kbd>&larr;</kbd> <kbd>&rarr;</kbd> move</li>
+            <li><kbd>&darr;</kbd> soft drop</li>
+            <li><kbd>Space</kbd> hard drop</li>
+            <li><kbd>&uarr;</kbd>/<kbd>X</kbd> rotate</li>
+            <li><kbd>Z</kbd> rotate ccw</li>
+            <li><kbd>P</kbd> pause</li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>

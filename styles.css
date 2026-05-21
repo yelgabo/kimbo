@@ -1,0 +1,134 @@
+:root {
+  --bg: #0d0f15;
+  --panel: #161a24;
+  --panel-2: #1f2433;
+  --grid: #222838;
+  --text: #e6e9f2;
+  --muted: #8a93ab;
+  --accent: #6cf0c2;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 24px;
+}
+
+.board-wrap {
+  position: relative;
+  background: var(--panel);
+  padding: 12px;
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+#board {
+  display: block;
+  background: #0a0c12;
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.overlay {
+  position: absolute;
+  inset: 12px;
+  background: rgba(10, 12, 18, 0.78);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+  text-align: center;
+  pointer-events: none;
+}
+
+.overlay.hidden { display: none; }
+
+#overlay-text {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+#overlay-sub {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.hud {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  min-width: 180px;
+}
+
+.hud-block {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.hud-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.hud-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+#next {
+  display: block;
+  background: var(--panel-2);
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.keys ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+kbd {
+  display: inline-block;
+  background: var(--panel-2);
+  border: 1px solid #2a3144;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--text);
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .stage { flex-direction: column; padding: 12px; }
+  .hud { grid-template-columns: repeat(2, 1fr); width: 100%; max-width: 320px; }
+  .keys { grid-column: span 2; }
+}
