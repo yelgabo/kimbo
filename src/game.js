@@ -6,7 +6,7 @@ import {
 import { PIECES, KICKS, cellsOf, createBag } from './pieces.js';
 import { emptyBoard, collides, clearLines } from './board.js';
 
-export function createGame() {
+export function createGame({ events = {} } = {}) {
   const nextType = createBag();
 
   const state = {
@@ -35,7 +35,7 @@ export function createGame() {
     state.piece = piece;
   }
 
-  function lock() {
+  function lock(silent) {
     for (const [dx, dy] of cellsOf(state.piece)) {
       const x = state.piece.x + dx;
       const y = state.piece.y + dy;
@@ -43,12 +43,16 @@ export function createGame() {
         state.board[y][x] = PIECES[state.piece.type].color;
       }
     }
+    if (!silent) events.lock?.();
     const cleared = clearLines(state.board);
     if (cleared > 0) {
       state.score += LINE_POINTS[cleared] * state.level;
       state.lines += cleared;
       const newLevel = Math.floor(state.lines / 10) + 1;
-      if (newLevel > state.level) state.level = newLevel;
+      const leveled = newLevel > state.level;
+      if (leveled) state.level = newLevel;
+      events.lineClear?.(cleared);
+      if (leveled) events.levelUp?.(state.level);
     }
     spawn();
   }
@@ -56,7 +60,10 @@ export function createGame() {
   function move(dx) {
     if (!state.piece) return;
     const trial = { ...state.piece, x: state.piece.x + dx };
-    if (!collides(trial, state.board)) state.piece = trial;
+    if (!collides(trial, state.board)) {
+      state.piece = trial;
+      events.move?.();
+    }
   }
 
   function rotate(dir) {
@@ -71,6 +78,7 @@ export function createGame() {
       };
       if (!collides(trial, state.board)) {
         state.piece = trial;
+        events.rotate?.();
         return;
       }
     }
@@ -104,7 +112,8 @@ export function createGame() {
       dist++;
     }
     state.score += dist * 2;
-    lock();
+    events.hardDrop?.();
+    lock(true);
   }
 
   function setSoftDrop(on) {
@@ -119,6 +128,7 @@ export function createGame() {
 
   function togglePause() {
     state.paused = !state.paused;
+    events.pause?.();
   }
 
   function topOut() {
@@ -130,6 +140,7 @@ export function createGame() {
     state.softDrop = false;
     state.piece = null;
     state.restartAt = performance.now() + RESTART_DELAY_MS;
+    events.topOut?.(state.score);
   }
 
   function restart() {
@@ -140,6 +151,7 @@ export function createGame() {
     state.dropTimer = 0;
     state.gameOver = false;
     spawn();
+    events.restart?.();
   }
 
   function dropInterval() {

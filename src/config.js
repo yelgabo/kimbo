@@ -3,9 +3,9 @@ export const ROWS = 20;
 export const CELL = 30;
 export const NEXT_CELL = 24;
 
-export const BOARD_BG = '#0a0c12';
-export const GRID_COLOR = '#161a24';
-export const NEXT_BG = '#1f2433';
+export const BOARD_BG = '#0a0807';
+export const GRID_COLOR = '#1d1714';
+export const NEXT_BG = '#1d1714';
 export const GHOST_ALPHA = 0.2;
 
 export const BEST_KEY = 'kimbo-tetris-best';

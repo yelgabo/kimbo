@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check c:/Users/gretc/Documents/GitHub/kimbo/game.js)"
+    ]
+  }
+}
