@@ -20,3 +20,8 @@ export const GRAVITY_MIN_MS = 60;
 export const SOFT_DROP_MS = 50;
 
 export const LINE_POINTS = [0, 40, 100, 300, 1200];
+
+export const API_BASE = '';
+export const LEADERBOARD_LIMIT = 10;
+export const PLAYER_ID_KEY = 'kimbo-player-id';
+export const LEADERBOARD_VISIBLE_DURING_PLAY = 1;

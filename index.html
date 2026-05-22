@@ -86,6 +86,14 @@
             <canvas id="next" width="120" height="120"></canvas>
           </div>
 
+          <div class="stat stat-leaderboard">
+            <div class="stat-label">LEADERBOARD</div>
+            <div id="leaderboard-you" class="lb-you is-unranked">YOU · unranked</div>
+            <ul id="leaderboard-list" class="lb-list">
+              <li class="lb-empty">be the first to score</li>
+            </ul>
+          </div>
+
           <div class="stat stat-keys">
             <div class="stat-label">KEYS</div>
             <dl class="keys">
@@ -116,6 +124,17 @@
         <span class="brand">KIMBO</span>
       </footer>
     </main>
+
+    <div id="replay-modal" class="replay-modal hidden">
+      <div class="replay-frame">
+        <div class="replay-head">
+          <div id="replay-title" class="replay-title"></div>
+          <button id="replay-close" class="replay-close" type="button" aria-label="close">×</button>
+        </div>
+        <canvas id="replay-canvas" width="300" height="600"></canvas>
+        <div id="replay-score" class="replay-score"></div>
+      </div>
+    </div>
 
     <script type="module" src="src/main.js"></script>
   </body>

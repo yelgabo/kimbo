@@ -10,11 +10,14 @@ export function createRenderer(refs) {
     boardCanvas, nextCanvas,
     overlay, overlayText, overlaySub,
     scoreEl, bestEl, levelEl, linesEl,
+    leaderboardList, leaderboardYou, leaderboardData,
   } = refs;
   const ctx = boardCanvas.getContext('2d');
   const nctx = nextCanvas.getContext('2d');
 
   let overlayKey = null;
+  let leaderboardKey = null;
+  let youKey = null;
 
   function drawCell(c, x, y, color, alpha) {
     c.globalAlpha = alpha == null ? 1 : alpha;
@@ -103,6 +106,14 @@ export function createRenderer(refs) {
     linesEl.textContent = state.lines;
   }
 
+  function formatRank(rank, total) {
+    if (rank == null) return null;
+    if (total == null) return `rank #${rank}`;
+    if (rank <= 10 || total <= 20) return `rank #${rank} of ${total}`;
+    const pct = Math.max(1, Math.round((rank / total) * 100));
+    return `rank #${rank} · top ${pct}%`;
+  }
+
   function setOverlay(key, title, sub) {
     if (key === overlayKey) return;
     overlayKey = key;
@@ -118,10 +129,85 @@ export function createRenderer(refs) {
   function drawOverlay(state) {
     if (state.paused) {
       setOverlay('paused', 'Paused', 'press P to resume');
-    } else if (state.gameOver) {
-      setOverlay(`gameover:${state.score}`, 'Game Over', `restarting…  score ${state.score}`);
-    } else {
-      setOverlay(null);
+      return;
+    }
+    if (state.gameOver) {
+      let sub;
+      let subKey;
+      if (state.submitFailed) {
+        sub = `score ${state.score} · offline — not submitted`;
+        subKey = 'fail';
+      } else if (state.lastRank != null) {
+        sub = `score ${state.score} · ${formatRank(state.lastRank, state.lastTotal)}`;
+        subKey = `r${state.lastRank}/${state.lastTotal}`;
+      } else {
+        sub = `restarting…  score ${state.score}`;
+        subKey = 'pending';
+      }
+      setOverlay(`gameover:${state.score}:${subKey}`, 'Game Over', sub);
+      return;
+    }
+    setOverlay(null);
+  }
+
+  function drawLeaderboard(state) {
+    if (!leaderboardList) return;
+    const entries = leaderboardData?.entries || [];
+    const myName = leaderboardData?.myName || '';
+    const visible = entries.slice(0, 5);
+    const key = JSON.stringify({
+      v: visible.map((e) => [e.rank, e.displayName, e.score, e.id, e.hasReplay ? 1 : 0]),
+      m: myName,
+    });
+    if (key !== leaderboardKey) {
+      leaderboardKey = key;
+      while (leaderboardList.firstChild) leaderboardList.removeChild(leaderboardList.firstChild);
+      if (visible.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'lb-empty';
+        li.textContent = 'be the first to score';
+        leaderboardList.appendChild(li);
+      } else {
+        for (const e of visible) {
+          const li = document.createElement('li');
+          li.className = 'lb-row';
+          if (e.displayName === myName) li.classList.add('is-you');
+          const rank = document.createElement('span');
+          rank.className = 'lb-rank';
+          rank.textContent = `#${e.rank}`;
+          const name = document.createElement('span');
+          name.className = 'lb-name';
+          name.textContent = e.displayName;
+          const score = document.createElement('span');
+          score.className = 'lb-score';
+          score.textContent = e.score.toLocaleString();
+          li.appendChild(rank);
+          li.appendChild(name);
+          li.appendChild(score);
+          if (e.hasReplay && e.id != null) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'lb-replay';
+            btn.dataset.id = String(e.id);
+            btn.title = 'watch replay';
+            btn.textContent = '▶';
+            li.appendChild(btn);
+          }
+          leaderboardList.appendChild(li);
+        }
+      }
+    }
+
+    if (leaderboardYou) {
+      const rankStr = state.lastRank != null
+        ? formatRank(state.lastRank, state.lastTotal)
+        : 'unranked';
+      const youText = `YOU · ${myName} · ${rankStr}`;
+      if (youText !== youKey) {
+        youKey = youText;
+        leaderboardYou.textContent = youText;
+        leaderboardYou.classList.toggle('is-unranked', state.lastRank == null);
+      }
     }
   }
 
@@ -131,6 +217,7 @@ export function createRenderer(refs) {
     drawPiece(state);
     drawNext(state);
     drawHud(state);
+    drawLeaderboard(state);
     drawOverlay(state);
   };
 }

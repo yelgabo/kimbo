@@ -3,11 +3,20 @@ import {
   BEST_KEY, RESTART_DELAY_MS, LINE_POINTS,
   GRAVITY_BASE_MS, GRAVITY_PER_LEVEL_MS, GRAVITY_MIN_MS, SOFT_DROP_MS,
 } from './config.js';
-import { PIECES, KICKS, cellsOf, createBag } from './pieces.js';
+import { PIECES, KICKS, cellsOf, createBag, mulberry32 } from './pieces.js';
 import { emptyBoard, collides, clearLines } from './board.js';
 
-export function createGame({ events = {} } = {}) {
-  const nextType = createBag();
+export const OP = {
+  L: 0, R: 1, SD_ON: 2, SD_OFF: 3, HARD: 4, CW: 5, CCW: 6,
+};
+
+function freshSeed() {
+  return Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
+}
+
+export function createGame({ events = {}, seed: initialSeed } = {}) {
+  let seed = (initialSeed ?? freshSeed()) >>> 0;
+  let nextType = createBag(mulberry32(seed));
 
   const state = {
     board: emptyBoard(),
@@ -22,6 +31,11 @@ export function createGame({ events = {} } = {}) {
     restartAt: 0,
     dropTimer: 0,
     softDrop: false,
+    gameTimeMs: 0,
+    seed,
+    lastRank: null,
+    lastTotal: null,
+    submitFailed: false,
   };
 
   function spawn() {
@@ -57,12 +71,17 @@ export function createGame({ events = {} } = {}) {
     spawn();
   }
 
+  function logInput(op) {
+    events.input?.(op, state.gameTimeMs);
+  }
+
   function move(dx) {
     if (!state.piece) return;
     const trial = { ...state.piece, x: state.piece.x + dx };
     if (!collides(trial, state.board)) {
       state.piece = trial;
       events.move?.();
+      logInput(dx < 0 ? OP.L : OP.R);
     }
   }
 
@@ -79,6 +98,7 @@ export function createGame({ events = {} } = {}) {
       if (!collides(trial, state.board)) {
         state.piece = trial;
         events.rotate?.();
+        logInput(dir === 'cw' ? OP.CW : OP.CCW);
         return;
       }
     }
@@ -113,6 +133,7 @@ export function createGame({ events = {} } = {}) {
     }
     state.score += dist * 2;
     events.hardDrop?.();
+    logInput(OP.HARD);
     lock(true);
   }
 
@@ -121,8 +142,10 @@ export function createGame({ events = {} } = {}) {
       state.softDrop = true;
       softDropStep();
       state.dropTimer = 0;
+      logInput(OP.SD_ON);
     } else {
       state.softDrop = false;
+      logInput(OP.SD_OFF);
     }
   }
 
@@ -140,7 +163,13 @@ export function createGame({ events = {} } = {}) {
     state.softDrop = false;
     state.piece = null;
     state.restartAt = performance.now() + RESTART_DELAY_MS;
-    events.topOut?.(state.score);
+    events.topOut?.({
+      score: state.score,
+      lines: state.lines,
+      level: state.level,
+      durationMs: Math.max(1000, Math.round(state.gameTimeMs)),
+      seed: state.seed,
+    });
   }
 
   function restart() {
@@ -150,6 +179,14 @@ export function createGame({ events = {} } = {}) {
     state.lines = 0;
     state.dropTimer = 0;
     state.gameOver = false;
+    state.gameTimeMs = 0;
+    state.lastRank = null;
+    state.lastTotal = null;
+    state.submitFailed = false;
+    seed = freshSeed();
+    state.seed = seed;
+    nextType = createBag(mulberry32(seed));
+    state.nextType = nextType();
     spawn();
     events.restart?.();
   }
@@ -165,6 +202,7 @@ export function createGame({ events = {} } = {}) {
       if (performance.now() >= state.restartAt) restart();
       return;
     }
+    state.gameTimeMs += dt;
     state.dropTimer += dt;
     const interval = dropInterval();
     while (state.dropTimer >= interval) {
