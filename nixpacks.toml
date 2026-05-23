@@ -1,0 +1,6 @@
+# Tell Nixpacks this is a Python project (no requirements.txt because stdlib-only).
+[phases.setup]
+nixPkgs = ["python311"]
+
+[start]
+cmd = "python server.py --host 0.0.0.0 --trust-proxy"

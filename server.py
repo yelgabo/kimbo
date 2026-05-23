@@ -553,11 +553,20 @@ def validate_score_body(body):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="kimbo leaderboard server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--db", default=os.path.join(REPO_ROOT, "data", "kimbo.db"))
-    parser.add_argument("--origin", default=None)
-    parser.add_argument("--trust-proxy", action="store_true")
+    # Env-var fallbacks support PaaS like Railway/Fly that inject $PORT.
+    # CLI flags still override; local `python server.py` is unchanged.
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
+    parser.add_argument(
+        "--db",
+        default=os.environ.get("DB_PATH", os.path.join(REPO_ROOT, "data", "kimbo.db")),
+    )
+    parser.add_argument("--origin", default=os.environ.get("KIMBO_ORIGIN") or None)
+    parser.add_argument(
+        "--trust-proxy",
+        action="store_true",
+        default=os.environ.get("TRUST_PROXY", "").lower() in ("1", "true", "yes"),
+    )
     args = parser.parse_args(argv)
 
     _verify_config_coupling()

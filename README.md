@@ -105,6 +105,21 @@ For social audit: every submitted score includes the recorded input log. Anyone 
 
 ## Deployment
 
+### Railway (zero-config-ish)
+
+The repo includes [`railway.json`](railway.json), [`nixpacks.toml`](nixpacks.toml), and [`Procfile`](Procfile). Railway will detect Python, install nothing (stdlib only), and start the server with `--host 0.0.0.0 --trust-proxy`. `--port` honors `$PORT`, which Railway injects automatically.
+
+**Required environment variables in the Railway dashboard:**
+
+| Variable | Value | Why |
+|---|---|---|
+| `DB_PATH` | `/data/kimbo.db` | The default `data/kimbo.db` lives inside the repo, which gets wiped on every deploy. You **must** mount a persistent volume (e.g. at `/data`) and point `DB_PATH` at it, or your leaderboard resets every push. |
+| `KIMBO_ORIGIN` | `https://<your-railway-domain>` | Pins the expected `Origin` header. Set this once Railway gives you a public URL. |
+
+`PORT`, `HOST`, and `TRUST_PROXY` are handled automatically by the start command — don't set them manually.
+
+### Self-hosted VPS
+
 Designed for a single VPS behind a reverse proxy. Sketch:
 
 ```
