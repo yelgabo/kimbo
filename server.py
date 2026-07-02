@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict, deque
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,9 +40,14 @@ DENIED_STATIC_SUFFIXES = (
     ".sqlite", ".sqlite-journal", ".sqlite-wal", ".sqlite-shm", ".sqlite3",
 )
 
-# Allowlist for static serving: only the game's frontend assets are reachable.
-# Everything else under the repo root (server.py, tests/, *.md, *.toml/json
-# config, dotfiles like .git/.claude) is denied. Extend deliberately.
+# Static serving is scoped to the game's actual assets, not just "any file
+# with an asset extension anywhere under the repo". Reachable set:
+#   - the site root  ("/" -> index.html)
+#   - an explicit root-file allowlist (index.html, styles.css, favicon)
+#   - anything under src/ with an allowlisted asset extension
+# Everything else (server.py, tests/, docs/, *.md, config, dotfiles) is denied.
+STATIC_ROOT_FILES = frozenset(("index.html", "styles.css", "favicon.ico"))
+STATIC_ASSET_DIR = "src"
 STATIC_ALLOWED_SUFFIXES = (
     ".html", ".css", ".js", ".mjs", ".map",
     ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp",
@@ -275,37 +280,52 @@ class KimboHandler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not Found")
         return None
 
-    def _static_path_allowed(self):
-        """Only the game's frontend assets are reachable via the static handler.
-
-        Denies (a) any path segment starting with '.' (blocks /.git/*, /.claude/*,
-        dotfiles, and '..' traversal segments) and (b) anything whose final
-        segment isn't an allowlisted asset extension (blocks server.py, tests/*.py,
-        *.md, *.toml, *.json config, Procfile, LICENSE, ...). Directory requests
-        (root or trailing slash) are allowed through so an index.html can serve;
-        list_directory() still returns 404 when there's no index.
+    def _static_rel_allowed(self, rel):
+        """Decide on the REPO_ROOT-relative path (POSIX '/'-joined) that will
+        actually be opened. Denies any dotfile/dot-dir segment, then scopes to
+        the game's assets: an explicit root-file allowlist, or a file under
+        src/ with an allowlisted extension. Everything else is refused.
         """
-        decoded = unquote(urlparse(self.path).path)
-        segments = [s for s in decoded.split("/") if s]
-        for seg in segments:
-            if seg.startswith("."):
-                return False
-        if not segments or decoded.endswith("/"):
-            return True
-        return segments[-1].lower().endswith(STATIC_ALLOWED_SUFFIXES)
+        parts = rel.split("/")
+        if any(p.startswith(".") for p in parts):
+            return False
+        if len(parts) == 1:
+            return parts[0] in STATIC_ROOT_FILES
+        if parts[0] == STATIC_ASSET_DIR:
+            return parts[-1].lower().endswith(STATIC_ALLOWED_SUFFIXES)
+        return False
 
     def send_head(self):
-        if not self._static_path_allowed():
-            self.send_error(404, "Not Found")
-            return None
-        # Defense in depth: never serve DB artifacts even if the allowlist widens.
-        if self.path:
-            lowered = self.path.lower().split("?", 1)[0]
+        # Run the allow-decision on the SAME filesystem path the base handler
+        # will open (translate_path already unquotes, normalizes, strips
+        # query/fragment, and confines the result under REPO_ROOT). This avoids
+        # any urlparse/translate_path divergence (e.g. '//server.py'). A bad
+        # byte (embedded NUL) surfaces as ValueError from isdir/relpath/open;
+        # treat it as 404 rather than letting it bubble to a 500.
+        try:
+            fs_path = self.translate_path(self.path)
+            if os.path.isdir(fs_path):
+                # Only the site root serves its index.html; every other
+                # directory (src/, docs/, ...) 404s. Keeps "/" working.
+                if os.path.abspath(fs_path) != REPO_ROOT:
+                    self.send_error(404, "Not Found")
+                    return None
+                return super().send_head()
+
+            rel = os.path.relpath(fs_path, REPO_ROOT).replace(os.sep, "/")
+            if rel.startswith("..") or not self._static_rel_allowed(rel):
+                self.send_error(404, "Not Found")
+                return None
+            # Defense in depth: never serve DB artifacts even if scoping widens.
+            lowered = rel.lower()
             for suf in DENIED_STATIC_SUFFIXES:
                 if lowered.endswith(suf):
                     self.send_error(404, "Not Found")
                     return None
-        return super().send_head()
+            return super().send_head()
+        except ValueError:
+            self.send_error(404, "Not Found")
+            return None
 
     # ── routing ──
 
