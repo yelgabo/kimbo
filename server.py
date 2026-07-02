@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict, deque
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -38,6 +38,35 @@ EXPECTED_BODY_KEYS = frozenset(
 DENIED_STATIC_SUFFIXES = (
     ".db", ".db-journal", ".db-wal", ".db-shm",
     ".sqlite", ".sqlite-journal", ".sqlite-wal", ".sqlite-shm", ".sqlite3",
+)
+
+# Allowlist for static serving: only the game's frontend assets are reachable.
+# Everything else under the repo root (server.py, tests/, *.md, *.toml/json
+# config, dotfiles like .git/.claude) is denied. Extend deliberately.
+STATIC_ALLOWED_SUFFIXES = (
+    ".html", ".css", ".js", ".mjs", ".map",
+    ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp",
+    ".woff", ".woff2", ".ttf", ".otf",
+)
+
+# Sent on every response. CSP allows same-origin assets plus the Google Fonts
+# stylesheet (fonts.googleapis.com) and font files (fonts.gstatic.com) the
+# page links; nothing inline (no inline <script>/<style>/style= is used).
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'",
+    ),
 )
 
 # Mirror of LINE_POINTS in src/config.js. Verified at startup; if config.js drifts,
@@ -226,10 +255,17 @@ class KimboHandler(SimpleHTTPRequestHandler):
         sys.stdout.flush()
 
     def _real_ip(self):
+        # When behind a trusted proxy, take the RIGHT-most X-Forwarded-For hop:
+        # each proxy appends the address it saw, so the last entry is the client
+        # as observed by our closest trusted proxy. Trusting the left-most entry
+        # would let a directly-reachable origin be handed a spoofed client IP
+        # (defeating the per-IP rate-limit arm).
         if self.trust_proxy:
             fwd = self.headers.get("X-Forwarded-For")
             if fwd:
-                return fwd.split(",")[0].strip()
+                parts = [p.strip() for p in fwd.split(",") if p.strip()]
+                if parts:
+                    return parts[-1]
         return self.client_address[0]
 
     # ── safety overrides ──
@@ -239,8 +275,30 @@ class KimboHandler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not Found")
         return None
 
+    def _static_path_allowed(self):
+        """Only the game's frontend assets are reachable via the static handler.
+
+        Denies (a) any path segment starting with '.' (blocks /.git/*, /.claude/*,
+        dotfiles, and '..' traversal segments) and (b) anything whose final
+        segment isn't an allowlisted asset extension (blocks server.py, tests/*.py,
+        *.md, *.toml, *.json config, Procfile, LICENSE, ...). Directory requests
+        (root or trailing slash) are allowed through so an index.html can serve;
+        list_directory() still returns 404 when there's no index.
+        """
+        decoded = unquote(urlparse(self.path).path)
+        segments = [s for s in decoded.split("/") if s]
+        for seg in segments:
+            if seg.startswith("."):
+                return False
+        if not segments or decoded.endswith("/"):
+            return True
+        return segments[-1].lower().endswith(STATIC_ALLOWED_SUFFIXES)
+
     def send_head(self):
-        # Block direct fetch of DB files even if they ever land in the served tree.
+        if not self._static_path_allowed():
+            self.send_error(404, "Not Found")
+            return None
+        # Defense in depth: never serve DB artifacts even if the allowlist widens.
         if self.path:
             lowered = self.path.lower().split("?", 1)[0]
             for suf in DENIED_STATIC_SUFFIXES:
@@ -254,6 +312,7 @@ class KimboHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         started = time.monotonic()
         status = 200
+        self._headers_started = False
         try:
             if self.path.startswith("/api/"):
                 status = self._handle_api_get()
@@ -262,13 +321,14 @@ class KimboHandler(SimpleHTTPRequestHandler):
                 status = getattr(self, "_last_static_status", 200)
         except Exception:
             status = 500
-            self._send_json(500, {"error": "internal"})
+            self._fail_500()
         finally:
             self._log_request(status, started)
 
     def do_POST(self):
         started = time.monotonic()
         status = 500
+        self._headers_started = False
         try:
             if self.path.startswith("/api/"):
                 status = self._handle_api_post()
@@ -276,15 +336,40 @@ class KimboHandler(SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": "not found"})
                 status = 404
         except Exception:
-            self._send_json(500, {"error": "internal"})
             status = 500
+            self._fail_500()
         finally:
             self._log_request(status, started)
 
-    # Track static status for logging
+    def _fail_500(self):
+        """Best-effort 500. If a (possibly partial) response is already on the
+        wire — e.g. a static file that failed mid-copy — don't write a second
+        status line into the stream; just drop the connection so the client sees
+        a truncated response rather than a corrupt double-send.
+        """
+        if getattr(self, "_headers_started", False):
+            self.close_connection = True
+            return
+        try:
+            self._send_json(500, {"error": "internal"})
+        except Exception:
+            self.close_connection = True
+
+    # Track static status for logging; note that a response has begun so the
+    # error path can avoid double-sending; and reset the per-response
+    # security-header guard (handler instances are reused on keep-alive).
     def send_response(self, code, message=None):
         self._last_static_status = code
+        self._headers_started = True
+        self._security_headers_sent = False
         super().send_response(code, message)
+
+    def end_headers(self):
+        if not getattr(self, "_security_headers_sent", False):
+            self._security_headers_sent = True
+            for name, value in SECURITY_HEADERS:
+                self.send_header(name, value)
+        super().end_headers()
 
     # ── API: GET ──
 
