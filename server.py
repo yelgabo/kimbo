@@ -40,6 +40,40 @@ DENIED_STATIC_SUFFIXES = (
     ".sqlite", ".sqlite-journal", ".sqlite-wal", ".sqlite-shm", ".sqlite3",
 )
 
+# Static serving is scoped to the game's actual assets, not just "any file
+# with an asset extension anywhere under the repo". Reachable set:
+#   - the site root  ("/" -> index.html)
+#   - an explicit root-file allowlist (index.html, styles.css, favicon)
+#   - anything under src/ with an allowlisted asset extension
+# Everything else (server.py, tests/, docs/, *.md, config, dotfiles) is denied.
+STATIC_ROOT_FILES = frozenset(("index.html", "styles.css", "favicon.ico"))
+STATIC_ASSET_DIR = "src"
+STATIC_ALLOWED_SUFFIXES = (
+    ".html", ".css", ".js", ".mjs", ".map",
+    ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp",
+    ".woff", ".woff2", ".ttf", ".otf",
+)
+
+# Sent on every response. CSP allows same-origin assets plus the Google Fonts
+# stylesheet (fonts.googleapis.com) and font files (fonts.gstatic.com) the
+# page links; nothing inline (no inline <script>/<style>/style= is used).
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'",
+    ),
+)
+
 # Mirror of LINE_POINTS in src/config.js. Verified at startup; if config.js drifts,
 # the server refuses to boot rather than silently mis-validate.
 LINE_POINTS = [0, 40, 100, 300, 1200]
@@ -226,10 +260,17 @@ class KimboHandler(SimpleHTTPRequestHandler):
         sys.stdout.flush()
 
     def _real_ip(self):
+        # When behind a trusted proxy, take the RIGHT-most X-Forwarded-For hop:
+        # each proxy appends the address it saw, so the last entry is the client
+        # as observed by our closest trusted proxy. Trusting the left-most entry
+        # would let a directly-reachable origin be handed a spoofed client IP
+        # (defeating the per-IP rate-limit arm).
         if self.trust_proxy:
             fwd = self.headers.get("X-Forwarded-For")
             if fwd:
-                return fwd.split(",")[0].strip()
+                parts = [p.strip() for p in fwd.split(",") if p.strip()]
+                if parts:
+                    return parts[-1]
         return self.client_address[0]
 
     # ── safety overrides ──
@@ -239,21 +280,59 @@ class KimboHandler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not Found")
         return None
 
+    def _static_rel_allowed(self, rel):
+        """Decide on the REPO_ROOT-relative path (POSIX '/'-joined) that will
+        actually be opened. Denies any dotfile/dot-dir segment, then scopes to
+        the game's assets: an explicit root-file allowlist, or a file under
+        src/ with an allowlisted extension. Everything else is refused.
+        """
+        parts = rel.split("/")
+        if any(p.startswith(".") for p in parts):
+            return False
+        if len(parts) == 1:
+            return parts[0] in STATIC_ROOT_FILES
+        if parts[0] == STATIC_ASSET_DIR:
+            return parts[-1].lower().endswith(STATIC_ALLOWED_SUFFIXES)
+        return False
+
     def send_head(self):
-        # Block direct fetch of DB files even if they ever land in the served tree.
-        if self.path:
-            lowered = self.path.lower().split("?", 1)[0]
+        # Run the allow-decision on the SAME filesystem path the base handler
+        # will open (translate_path already unquotes, normalizes, strips
+        # query/fragment, and confines the result under REPO_ROOT). This avoids
+        # any urlparse/translate_path divergence (e.g. '//server.py'). A bad
+        # byte (embedded NUL) surfaces as ValueError from isdir/relpath/open;
+        # treat it as 404 rather than letting it bubble to a 500.
+        try:
+            fs_path = self.translate_path(self.path)
+            if os.path.isdir(fs_path):
+                # Only the site root serves its index.html; every other
+                # directory (src/, docs/, ...) 404s. Keeps "/" working.
+                if os.path.abspath(fs_path) != REPO_ROOT:
+                    self.send_error(404, "Not Found")
+                    return None
+                return super().send_head()
+
+            rel = os.path.relpath(fs_path, REPO_ROOT).replace(os.sep, "/")
+            if rel.startswith("..") or not self._static_rel_allowed(rel):
+                self.send_error(404, "Not Found")
+                return None
+            # Defense in depth: never serve DB artifacts even if scoping widens.
+            lowered = rel.lower()
             for suf in DENIED_STATIC_SUFFIXES:
                 if lowered.endswith(suf):
                     self.send_error(404, "Not Found")
                     return None
-        return super().send_head()
+            return super().send_head()
+        except ValueError:
+            self.send_error(404, "Not Found")
+            return None
 
     # ── routing ──
 
     def do_GET(self):
         started = time.monotonic()
         status = 200
+        self._headers_started = False
         try:
             if self.path.startswith("/api/"):
                 status = self._handle_api_get()
@@ -262,13 +341,14 @@ class KimboHandler(SimpleHTTPRequestHandler):
                 status = getattr(self, "_last_static_status", 200)
         except Exception:
             status = 500
-            self._send_json(500, {"error": "internal"})
+            self._fail_500()
         finally:
             self._log_request(status, started)
 
     def do_POST(self):
         started = time.monotonic()
         status = 500
+        self._headers_started = False
         try:
             if self.path.startswith("/api/"):
                 status = self._handle_api_post()
@@ -276,15 +356,40 @@ class KimboHandler(SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": "not found"})
                 status = 404
         except Exception:
-            self._send_json(500, {"error": "internal"})
             status = 500
+            self._fail_500()
         finally:
             self._log_request(status, started)
 
-    # Track static status for logging
+    def _fail_500(self):
+        """Best-effort 500. If a (possibly partial) response is already on the
+        wire — e.g. a static file that failed mid-copy — don't write a second
+        status line into the stream; just drop the connection so the client sees
+        a truncated response rather than a corrupt double-send.
+        """
+        if getattr(self, "_headers_started", False):
+            self.close_connection = True
+            return
+        try:
+            self._send_json(500, {"error": "internal"})
+        except Exception:
+            self.close_connection = True
+
+    # Track static status for logging; note that a response has begun so the
+    # error path can avoid double-sending; and reset the per-response
+    # security-header guard (handler instances are reused on keep-alive).
     def send_response(self, code, message=None):
         self._last_static_status = code
+        self._headers_started = True
+        self._security_headers_sent = False
         super().send_response(code, message)
+
+    def end_headers(self):
+        if not getattr(self, "_security_headers_sent", False):
+            self._security_headers_sent = True
+            for name, value in SECURITY_HEADERS:
+                self.send_header(name, value)
+        super().end_headers()
 
     # ── API: GET ──
 
